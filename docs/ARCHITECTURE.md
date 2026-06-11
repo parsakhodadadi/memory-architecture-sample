@@ -43,11 +43,15 @@ Swagger / HTTP client
 
 ```text
 cmd/api/                 application entry point
-internal/config/         environment configuration
-internal/httpapi/        routes, handlers, and Swagger
-internal/memory/         memory contracts and implementations
-internal/chat/           chat orchestration
-internal/retention/      cleanup job
+internal/domain/         enterprise entities
+internal/ports/          interfaces owned by the application core
+internal/application/    use cases and orchestration
+internal/infrastructure/ technical adapter implementations
+internal/interfaces/http HTTP handlers and Swagger delivery
 migrations/              PostgreSQL and pgvector schema
 docs/                    architecture and saved chat notes
 ```
+
+Dependencies point inward: HTTP and storage adapters depend on application
+ports and domain entities. The application layer does not import HTTP, Redis,
+PostgreSQL, or any other infrastructure package.
