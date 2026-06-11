@@ -31,7 +31,19 @@ Swagger / HTTP client
 4. pgvector returns semantically similar long-term memories.
 5. The local response generator creates a testable reply from that context.
 6. The user message and reply are stored in Redis.
-7. Important user messages can also be stored in PostgreSQL.
+7. The user message and its 32-dimensional embedding are stored in PostgreSQL.
+
+## Memory Modules
+
+- `ShortTermMemory` is implemented by Redis using one bounded list per
+  conversation. Every write refreshes the list TTL.
+- `LongTermMemory` is implemented by PostgreSQL. pgvector orders memories by
+  cosine distance to the query embedding.
+- `HashEmbedder` is deterministic and local. It is intentionally simple: this
+  project demonstrates memory architecture rather than model quality.
+- Search uses hybrid ranking: pgvector retrieves candidates, then normalized
+  word overlap reranks them. Punctuation, common question words, and simple
+  aliases such as `like`, `prefer`, and `favorite` are normalized locally.
 
 ## Retention
 

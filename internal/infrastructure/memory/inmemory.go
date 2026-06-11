@@ -48,3 +48,7 @@ func (s *InMemoryStore) Clear(_ context.Context, conversationID string) error {
 	delete(s.messages, conversationID)
 	return nil
 }
+
+func (s *InMemoryStore) Ping(_ context.Context) error {
+	return nil
+}

@@ -58,6 +58,43 @@ var openAPISpec = []byte(`{
         }
       }
     },
+    "/api/v1/memories/search": {
+      "post": {
+        "summary": "Search long-term semantic memory",
+        "description": "Creates a local embedding for the query and uses pgvector cosine similarity.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/MemorySearchRequest"},
+              "example": {"conversationId": "demo-1", "query": "Which language do I like?", "limit": 5}
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Related semantic memories"},
+          "400": {"description": "Invalid request"}
+        }
+      }
+    },
+    "/api/v1/memories/{memoryId}": {
+      "delete": {
+        "summary": "Delete one long-term memory",
+        "parameters": [
+          {
+            "name": "memoryId",
+            "in": "path",
+            "required": true,
+            "description": "The id returned by semantic memory search.",
+            "schema": {"type": "string"}
+          }
+        ],
+        "responses": {
+          "204": {"description": "Memory deleted"},
+          "404": {"description": "Memory not found"}
+        }
+      }
+    },
     "/api/v1/conversations/{conversationId}/messages": {
       "get": {
         "summary": "Get recent conversation messages",
@@ -73,6 +110,15 @@ var openAPISpec = []byte(`{
           {"name": "conversationId", "in": "path", "required": true, "schema": {"type": "string"}}
         ],
         "responses": {"204": {"description": "Conversation cleared"}}
+      }
+    },
+    "/api/v1/conversations/{conversationId}/memories": {
+      "delete": {
+        "summary": "Delete all long-term memories for a conversation",
+        "parameters": [
+          {"name": "conversationId", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {"204": {"description": "Long-term memories deleted"}}
       }
     }
   },
@@ -105,7 +151,28 @@ var openAPISpec = []byte(`{
         "properties": {
           "conversationId": {"type": "string"},
           "reply": {"type": "string"},
-          "context": {"type": "array", "items": {"$ref": "#/components/schemas/Message"}}
+          "context": {"type": "array", "items": {"$ref": "#/components/schemas/Message"}},
+          "recalledMemory": {"type": "array", "items": {"$ref": "#/components/schemas/SemanticMemory"}}
+        }
+      },
+      "MemorySearchRequest": {
+        "type": "object",
+        "required": ["conversationId", "query"],
+        "properties": {
+          "conversationId": {"type": "string"},
+          "query": {"type": "string"},
+          "limit": {"type": "integer", "default": 5, "minimum": 1, "maximum": 20}
+        }
+      },
+      "SemanticMemory": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "conversationId": {"type": "string"},
+          "content": {"type": "string"},
+          "similarity": {"type": "number", "format": "double"},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "expiresAt": {"type": "string", "format": "date-time"}
         }
       }
     }

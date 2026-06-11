@@ -18,9 +18,12 @@ var (
 )
 
 type Service struct {
-	memory    ports.ShortTermMemory
+	shortTerm ports.ShortTermMemory
+	longTerm  ports.LongTermMemory
+	embedder  ports.Embedder
 	responder ports.Responder
 	now       func() time.Time
+	longTTL   time.Duration
 }
 
 type SendInput struct {
@@ -29,13 +32,28 @@ type SendInput struct {
 }
 
 type SendOutput struct {
-	ConversationID string           `json:"conversationId"`
-	Reply          string           `json:"reply"`
-	Context        []domain.Message `json:"context"`
+	ConversationID  string                  `json:"conversationId"`
+	Reply           string                  `json:"reply"`
+	Context         []domain.Message        `json:"context"`
+	RecalledMemory  []domain.SemanticMemory `json:"recalledMemory"`
 }
 
-func NewService(memory ports.ShortTermMemory, responder ports.Responder, now func() time.Time) *Service {
-	return &Service{memory: memory, responder: responder, now: now}
+func NewService(
+	shortTerm ports.ShortTermMemory,
+	longTerm ports.LongTermMemory,
+	embedder ports.Embedder,
+	responder ports.Responder,
+	now func() time.Time,
+	longTTL time.Duration,
+) *Service {
+	return &Service{
+		shortTerm: shortTerm,
+		longTerm:  longTerm,
+		embedder:  embedder,
+		responder: responder,
+		now:       now,
+		longTTL:   longTTL,
+	}
 }
 
 func (s *Service) Send(ctx context.Context, input SendInput) (SendOutput, error) {
@@ -49,12 +67,18 @@ func (s *Service) Send(ctx context.Context, input SendInput) (SendOutput, error)
 		return SendOutput{}, ErrMessageRequired
 	}
 
-	recent, err := s.memory.List(ctx, conversationID, 10)
+	recent, err := s.shortTerm.List(ctx, conversationID, 10)
 	if err != nil {
 		return SendOutput{}, err
 	}
 
-	reply, err := s.responder.Reply(ctx, message, recent)
+	embedding := s.embedder.Embed(message)
+	recalled, err := s.longTerm.Search(ctx, conversationID, message, embedding, 3)
+	if err != nil {
+		return SendOutput{}, err
+	}
+
+	reply, err := s.responder.Reply(ctx, message, recent, recalled)
 	if err != nil {
 		return SendOutput{}, err
 	}
@@ -75,7 +99,18 @@ func (s *Service) Send(ctx context.Context, input SendInput) (SendOutput, error)
 		CreatedAt:      createdAt,
 	}
 
-	if err := s.memory.Save(ctx, userMessage, assistantMessage); err != nil {
+	if err := s.shortTerm.Save(ctx, userMessage, assistantMessage); err != nil {
+		return SendOutput{}, err
+	}
+
+	semanticMemory := domain.SemanticMemory{
+		ID:             newID(),
+		ConversationID: conversationID,
+		Content:        message,
+		CreatedAt:      createdAt,
+		ExpiresAt:      createdAt.Add(s.longTTL),
+	}
+	if err := s.longTerm.Save(ctx, semanticMemory, embedding); err != nil {
 		return SendOutput{}, err
 	}
 
@@ -83,6 +118,7 @@ func (s *Service) Send(ctx context.Context, input SendInput) (SendOutput, error)
 		ConversationID: conversationID,
 		Reply:          reply,
 		Context:        recent,
+		RecalledMemory: recalled,
 	}, nil
 }
 
@@ -93,14 +129,14 @@ func (s *Service) History(ctx context.Context, conversationID string, limit int)
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	return s.memory.List(ctx, conversationID, limit)
+	return s.shortTerm.List(ctx, conversationID, limit)
 }
 
 func (s *Service) Clear(ctx context.Context, conversationID string) error {
 	if strings.TrimSpace(conversationID) == "" {
 		return ErrConversationIDRequired
 	}
-	return s.memory.Clear(ctx, conversationID)
+	return s.shortTerm.Clear(ctx, conversationID)
 }
 
 func newID() string {

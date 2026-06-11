@@ -3,19 +3,22 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/example/memory-architecture-sample/internal/application/chat"
+	memoryapp "github.com/example/memory-architecture-sample/internal/application/memory"
 )
 
 type Server struct {
-	chat *chat.Service
+	chat   *chat.Service
+	memory *memoryapp.Service
 }
 
-func NewServer(chatService *chat.Service) *Server {
-	return &Server{chat: chatService}
+func NewServer(chatService *chat.Service, memoryService *memoryapp.Service) *Server {
+	return &Server{chat: chatService, memory: memoryService}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -24,6 +27,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/chat", s.sendMessage)
 	mux.HandleFunc("GET /api/v1/conversations/{conversationID}/messages", s.history)
 	mux.HandleFunc("DELETE /api/v1/conversations/{conversationID}/messages", s.clear)
+	mux.HandleFunc("POST /api/v1/memories/search", s.searchMemory)
+	mux.HandleFunc("DELETE /api/v1/memories/{memoryID}", s.deleteMemory)
+	mux.HandleFunc("DELETE /api/v1/conversations/{conversationID}/memories", s.clearLongTermMemory)
 	mux.HandleFunc("GET /openapi.json", s.openAPI)
 	mux.HandleFunc("GET /swagger", s.swagger)
 	mux.HandleFunc("GET /swagger/", s.swagger)
@@ -73,6 +79,66 @@ func (s *Server) clear(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) searchMemory(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		ConversationID string `json:"conversationId"`
+		Query          string `json:"query"`
+		Limit          int    `json:"limit"`
+	}
+	if err := decodeJSON(w, r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	memories, err := s.memory.Search(
+		r.Context(),
+		request.ConversationID,
+		request.Query,
+		request.Limit,
+	)
+	if err != nil {
+		if errors.Is(err, memoryapp.ErrConversationIDRequired) ||
+			errors.Is(err, memoryapp.ErrQueryRequired) {
+			writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", "the request could not be completed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"memories": memories})
+}
+
+func (s *Server) deleteMemory(w http.ResponseWriter, r *http.Request) {
+	err := s.memory.Delete(r.Context(), r.PathValue("memoryID"))
+	if err != nil {
+		switch {
+		case errors.Is(err, memoryapp.ErrMemoryIDRequired):
+			writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+		case errors.Is(err, memoryapp.ErrMemoryNotFound):
+			writeError(w, http.StatusNotFound, "not_found", err.Error())
+		default:
+			log.Printf("delete memory failed: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "the request could not be completed")
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) clearLongTermMemory(w http.ResponseWriter, r *http.Request) {
+	err := s.memory.ClearConversation(r.Context(), r.PathValue("conversationID"))
+	if err != nil {
+		if errors.Is(err, memoryapp.ErrConversationIDRequired) {
+			writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+			return
+		}
+		log.Printf("clear long-term memory failed: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "the request could not be completed")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) openAPI(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(openAPISpec)
@@ -88,6 +154,7 @@ func (s *Server) writeServiceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "validation_error", err.Error())
 		return
 	}
+	log.Printf("chat request failed: %v", err)
 	writeError(w, http.StatusInternalServerError, "internal_error", "the request could not be completed")
 }
 

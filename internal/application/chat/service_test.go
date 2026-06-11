@@ -6,14 +6,23 @@ import (
 	"time"
 
 	"github.com/example/memory-architecture-sample/internal/application/chat"
+	"github.com/example/memory-architecture-sample/internal/infrastructure/embedding"
 	"github.com/example/memory-architecture-sample/internal/infrastructure/memory"
 	"github.com/example/memory-architecture-sample/internal/infrastructure/responder"
 )
 
 func TestSendStoresUserAndAssistantMessages(t *testing.T) {
-	store := memory.NewInMemoryStore()
+	shortTerm := memory.NewInMemoryStore()
+	longTerm := memory.NewInMemoryLongTermStore()
 	now := time.Date(2026, 6, 11, 10, 0, 0, 0, time.UTC)
-	service := chat.NewService(store, responder.NewTemplateResponder(), func() time.Time { return now })
+	service := chat.NewService(
+		shortTerm,
+		longTerm,
+		embedding.NewHashEmbedder(),
+		responder.NewTemplateResponder(),
+		func() time.Time { return now },
+		30*24*time.Hour,
+	)
 
 	output, err := service.Send(context.Background(), chat.SendInput{
 		ConversationID: "conversation-1",
@@ -41,8 +50,11 @@ func TestSendStoresUserAndAssistantMessages(t *testing.T) {
 func TestSendRejectsEmptyMessage(t *testing.T) {
 	service := chat.NewService(
 		memory.NewInMemoryStore(),
+		memory.NewInMemoryLongTermStore(),
+		embedding.NewHashEmbedder(),
 		responder.NewTemplateResponder(),
 		time.Now,
+		30*24*time.Hour,
 	)
 
 	_, err := service.Send(context.Background(), chat.SendInput{
@@ -51,5 +63,40 @@ func TestSendRejectsEmptyMessage(t *testing.T) {
 	})
 	if err != chat.ErrMessageRequired {
 		t.Fatalf("expected ErrMessageRequired, got %v", err)
+	}
+}
+
+func TestSendRecallsRelatedLongTermMemory(t *testing.T) {
+	shortTerm := memory.NewInMemoryStore()
+	longTerm := memory.NewInMemoryLongTermStore()
+	service := chat.NewService(
+		shortTerm,
+		longTerm,
+		embedding.NewHashEmbedder(),
+		responder.NewTemplateResponder(),
+		time.Now,
+		30*24*time.Hour,
+	)
+
+	_, err := service.Send(context.Background(), chat.SendInput{
+		ConversationID: "conversation-1",
+		Message:        "My favorite language is Go.",
+	})
+	if err != nil {
+		t.Fatalf("first Send returned an error: %v", err)
+	}
+
+	output, err := service.Send(context.Background(), chat.SendInput{
+		ConversationID: "conversation-1",
+		Message:        "What is my favorite language?",
+	})
+	if err != nil {
+		t.Fatalf("second Send returned an error: %v", err)
+	}
+	if len(output.RecalledMemory) == 0 {
+		t.Fatal("expected a recalled long-term memory")
+	}
+	if output.RecalledMemory[0].Content != "My favorite language is Go." {
+		t.Fatalf("unexpected recalled memory: %q", output.RecalledMemory[0].Content)
 	}
 }
